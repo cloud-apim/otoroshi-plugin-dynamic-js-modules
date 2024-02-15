@@ -7,6 +7,7 @@ import com.github.blemale.scaffeine.Scaffeine
 import io.otoroshi.wasm4s.scaladsl._
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
+import otoroshi.models.WasmPlugin
 import otoroshi.next.models.NgRoute
 import otoroshi.next.plugins._
 import otoroshi.next.plugins.api._
@@ -61,12 +62,7 @@ case class JsModulePluginConfig(runtimeRef: Option[String], module: String, modu
   def wasmConfig(): WasmConfig = {
     runtimeRef match {
       case Some(ref) =>  WasmConfig(source = WasmSource(WasmSourceKind.Local, ref, Json.obj()))
-      case None =>  WasmConfig(
-        source = WasmSource(WasmSourceKind.File, "file://" + JsModulePlugin.runtimePathRef.get(), Json.obj()),
-        wasi = true,
-        allowedHosts = Seq("*"),
-        authorizations = WasmAuthorizations().copy(httpAccess = true)
-      )
+      case None => WasmConfig(source = WasmSource(WasmSourceKind.Local, JsModulePlugin.wasmPluginId, Json.obj()))
     }
   }
 }
@@ -100,7 +96,7 @@ object JsModulePluginConfig {
 }
 
 object JsModulePlugin {
-  val runtimePathRef = new AtomicReference[String](null)
+  val wasmPluginId = "wasm-plugin_cloud_apim_dynamic_js_modules_runtime"
 }
 
 class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with NgBackendCall {
@@ -163,15 +159,24 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
   private val modulesCache = Scaffeine().maximumSize(1000).expireAfterWrite(120.seconds).build[String, String]
 
   override def start(env: Env): Future[Unit] = {
+    implicit val ev = env
     implicit val ec = env.otoroshiExecutionContext
-    implicit val mat = env.otoroshiMaterializer
-    val stream = env.environment.classLoader.getResourceAsStream("runtime.wasm")
-    StreamConverters.fromInputStream(() => stream)
-      .runFold(ByteString.empty)(_ ++ _).map { content =>
-        val path = Files.createTempFile("", ".wasm")
-        Files.write(path, content.toArray)
-        JsModulePlugin.runtimePathRef.set(path.toString)
+    env.datastores.wasmPluginsDataStore.findById(JsModulePlugin.wasmPluginId).flatMap {
+      case Some(_) => ().vfuture
+      case None => {
+        env.datastores.wasmPluginsDataStore.set(WasmPlugin(
+          id = JsModulePlugin.wasmPluginId,
+          name = "Cloud APIM - Dynamic Js Module Runtime",
+          description = "This plugin provides the runtime for the Dynamic Js Module Runtime plugin from Cloud APIM",
+          config = WasmConfig(
+            source = WasmSource(WasmSourceKind.ClassPath, "runtime.wasm", Json.obj()),
+            wasi = true,
+            allowedHosts = Seq("*"),
+            authorizations = WasmAuthorizations().copy(httpAccess = true)
+          )
+        )).map(_ => ())
       }
+    }
   }
 
   private def pluginNotFound(request: RequestHeader, route: NgRoute, attrs: TypedMap)(implicit env: Env, ec: ExecutionContext): Future[Result] = {
