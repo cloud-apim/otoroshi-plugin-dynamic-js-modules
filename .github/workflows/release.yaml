@@ -7,7 +7,7 @@ on:
         description: "Version number"
 
 jobs:
-  build-and-upload:
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -19,7 +19,7 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18.x'
-      - name: install exitsm js pdk
+      - name: install extism js pdk
         run: |
           curl -O https://raw.githubusercontent.com/extism/js-pdk/main/install.sh
           sh install.sh
@@ -29,7 +29,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sh ./build-js-runtime.js
+          sh ./build-js-runtime.sh
       - name: change version
         run: |
           echo 'ThisBuild / version := "${{ inputs.version }}"' > version.sbt
