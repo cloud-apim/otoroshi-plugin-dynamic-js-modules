@@ -62,7 +62,7 @@ case class JsModulePluginConfig(runtimeRef: Option[String], module: String, modu
     runtimeRef match {
       case Some(ref) =>  WasmConfig(source = WasmSource(WasmSourceKind.Local, ref, Json.obj()))
       case None =>  WasmConfig(
-        source = WasmSource(WasmSourceKind.File, JsModulePlugin.runtimePathRef.get(), Json.obj()),
+        source = WasmSource(WasmSourceKind.File, "file://" + JsModulePlugin.runtimePathRef.get(), Json.obj()),
         wasi = true,
         allowedHosts = Seq("*"),
         authorizations = WasmAuthorizations().copy(httpAccess = true)
