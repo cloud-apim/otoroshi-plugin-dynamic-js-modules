@@ -1,4 +1,4 @@
 cd ./js-runtime
 npm install
 npm run build
-cp ./dist/runtime.wasm ../src/main/resources/runtime.wasm
+cp ./dist/otoroshi-plugin-dynamic-js-modules-runtime.wasm ../src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm

@@ -169,7 +169,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           name = "Cloud APIM - Dynamic Js Module Runtime",
           description = "This plugin provides the runtime for the Dynamic Js Module Runtime plugin from Cloud APIM",
           config = WasmConfig(
-            source = WasmSource(WasmSourceKind.ClassPath, "runtime.wasm", Json.obj()),
+            source = WasmSource(WasmSourceKind.ClassPath, "wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm", Json.obj()),
             memoryPages = 60,
             wasi = true,
             allowedHosts = Seq("*"),

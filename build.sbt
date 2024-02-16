@@ -7,7 +7,7 @@ ThisBuild / organizationName := "Cloud-APIM"
 
 lazy val root = (project in file("."))
   .settings(
-    name := "cloud-apim-dynamic-js-modules",
+    name := "otoroshi-plugin-dynamic-js-modules",
     resolvers += "jitpack" at "https://jitpack.io",
     libraryDependencies ++= Seq(
       "fr.maif" %% "otoroshi" % "16.14.0" excludeAll(ExclusionRule("fr.maif", "wasm4s")),
