@@ -161,6 +161,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
   override def start(env: Env): Future[Unit] = {
     implicit val ev = env
     implicit val ec = env.otoroshiExecutionContext
+    env.logger.info("[Cloud APIM] the 'Dynamic Js Module' plugin is available !")
     env.datastores.wasmPluginsDataStore.findById(JsModulePlugin.wasmPluginId).flatMap {
       case Some(_) => ().vfuture
       case None => {
