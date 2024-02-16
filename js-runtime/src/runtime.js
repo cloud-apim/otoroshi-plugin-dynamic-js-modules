@@ -132,7 +132,11 @@ function cloud_apim_module_plugin_execute(phase) {
     if (exps[phase]) {
       const result = exps[phase](cleanedInput);
       if (result) {
-        Host.outputString(JSON.stringify(result));
+        if (result.then && result.value) {
+          Host.outputString(JSON.stringify(result.value));
+        } else {
+          Host.outputString(JSON.stringify(result));
+        }
       } else {
         Host.outputString(JSON.stringify({
           error: true,
