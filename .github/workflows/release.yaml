@@ -42,7 +42,7 @@ jobs:
       - name: Generate SHA-256
         run: |
           shasum -a 256 ./target/scala-2.12/otoroshi-plugin-dynamic-js-modules_2.12-${{ inputs.version }}.jar | cut -d ' ' -f 1 > ./target/scala-2.12/otoroshi-plugin-dynamic-js-modules_2.12-${{ inputs.version }}.jar.sha256
-          shasum -a 256 ./src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm | cut -d ' ' -f 1 > ./src/main/resources/otoroshi-plugin-dynamic-js-modules-runtime.wasm.sha256
+          shasum -a 256 ./src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm | cut -d ' ' -f 1 > ./src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm.sha256
       - name: Release binary and SHA-256 checksum to GitHub
         uses: softprops/action-gh-release@v1
         with:
@@ -50,5 +50,5 @@ jobs:
           files: |
             ./target/scala-2.12/otoroshi-plugin-dynamic-js-modules_2.12-${{ inputs.version }}.jar
             ./target/scala-2.12/otoroshi-plugin-dynamic-js-modules_2.12-${{ inputs.version }}.jar.sha256
-            ./src/main/resources/otoroshi-plugin-dynamic-js-modules-runtime.wasm 
-            ./src/main/resources/otoroshi-plugin-dynamic-js-modules-runtime.wasm.sha256
+            ./src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm 
+            ./src/main/resources/wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm.sha256
