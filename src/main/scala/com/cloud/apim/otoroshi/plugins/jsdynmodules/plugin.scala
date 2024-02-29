@@ -120,7 +120,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
   override def description: Option[String]                 = "Dynamically run Js Modules without the need to compile them before".some
   override def defaultConfigObject: Option[NgPluginConfig] = JsModulePluginConfig.default.some
 
-  def noJsForm: Boolean = true
+  override def noJsForm: Boolean = true
 
   override def jsonDescription(): JsObject = Json.obj(
     "name"          -> name,
