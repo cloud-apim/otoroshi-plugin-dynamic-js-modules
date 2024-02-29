@@ -107,7 +107,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     NgStep.CallBackend,
     NgStep.TransformResponse,
   )
-  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.Wasm)
+  override def categories: Seq[NgPluginCategory] = Seq(NgPluginCategory.Wasm, NgPluginCategory.Custom("Cloud APIM"))
   override def visibility: NgPluginVisibility              = NgPluginVisibility.NgUserLand
   override def multiInstance: Boolean                      = true
   override def core: Boolean                               = false
