@@ -18,6 +18,7 @@ import otoroshi.storage.drivers.inmemory.S3Configuration
 import otoroshi.utils.TypedMap
 import otoroshi.utils.syntax.implicits._
 import otoroshi.wasm._
+import play.api.Logger
 import play.api.libs.json._
 import play.api.libs.ws.DefaultWSCookie
 import play.api.mvc._
@@ -125,6 +126,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
   override def name: String                                = "Cloud APIM - Js Module plugin"
   override def description: Option[String]                 = "Dynamically run Js Modules without the need to compile them before".some
   override def defaultConfigObject: Option[NgPluginConfig] = JsModulePluginConfig.default.some
+
+  private val logger = Logger("JsModulePlugin")
 
   override def noJsForm: Boolean = true
 
@@ -330,16 +333,28 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           modulesCache.put(path, path)
           path.vfuture
         } else if (path.startsWith("s3://")) {
+          logger.info(s"fetching from S3: ${path}")
           val config = S3Configuration.format.reads(JsObject(pluginConfig.headers.mapValues(_.json))).get
           fileContent(pluginConfig.module.replaceFirst("s3://", ""), config)(env.otoroshiExecutionContext, env.otoroshiMaterializer).flatMap {
-            case None => getDefaultCode(pluginConfig).map { code =>
-              modulesCache.put(pluginConfig.module, code)
-              code
+            case None => {
+              logger.info(s"unable to fetch from S3: ${path}")
+              getDefaultCode(pluginConfig).map { code =>
+                modulesCache.put(pluginConfig.module, code)
+                code
+              }
             }
             case Some((_, codeRaw)) => {
               val code = codeRaw.utf8String
               modulesCache.put(path, code)
               code.vfuture
+            }
+          }.recoverWith {
+            case t: Throwable => {
+              logger.error(s"error when fetch from S3: ${path}", t)
+              getDefaultCode(pluginConfig).map { code =>
+                modulesCache.put(pluginConfig.module, code)
+                code
+              }
             }
           }
         } else {
@@ -403,6 +418,10 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
               }
           }
         })
+    }.recover {
+      case t: Throwable =>
+        logger.error("plugin error on access phase", t)
+        NgAccess.NgDenied(Results.InternalServerError(Json.obj("error" -> "plugin error on access phase")))
     }
   }
 
@@ -454,6 +473,10 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
               }
           }
         })
+    }.recover {
+      case t: Throwable =>
+        logger.error("plugin error on backend call phase", t)
+        Left(NgProxyEngineError.NgResultProxyEngineError(Results.InternalServerError(Json.obj("error" -> "plugin error on backend call phase"))))
     }
   }
 
@@ -516,6 +539,10 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
               }
           }
         })
+    }.recover {
+      case t: Throwable =>
+        logger.error("plugin error on transform request phase", t)
+        Left(Results.InternalServerError(Json.obj("error" -> "plugin error on transform request phase")))
     }
   }
 
@@ -576,6 +603,10 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
               }
           }
         })
+    }.recover {
+      case t: Throwable =>
+        logger.error("plugin error on transform response phase", t)
+        Left(Results.InternalServerError(Json.obj("error" -> "plugin error on transform response phase")))
     }
   }
 
@@ -626,5 +657,9 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           }
         })
     }
+  }.recover {
+    case t: Throwable =>
+      logger.error("plugin error on transform error phase", t)
+      NgPluginHttpResponse.fromResult(Results.InternalServerError(Json.obj("error" -> "plugin error on transform error phase")))
   }
 }
