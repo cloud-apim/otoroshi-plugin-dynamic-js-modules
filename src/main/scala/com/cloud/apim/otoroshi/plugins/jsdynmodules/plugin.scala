@@ -1,7 +1,9 @@
 package otoroshi_plugins.com.cloud.apim.plugins.jsdynmodules
 
-import akka.stream.Materializer
-import akka.stream.scaladsl.StreamConverters
+import akka.stream.alpakka.s3.scaladsl.S3
+import akka.stream.{Attributes, Materializer}
+import akka.stream.alpakka.s3.{ApiVersion, MemoryBufferType, ObjectMetadata, S3Attributes, S3Settings}
+import akka.stream.scaladsl.{Sink, StreamConverters}
 import akka.util.ByteString
 import com.github.blemale.scaffeine.Scaffeine
 import io.otoroshi.wasm4s.scaladsl._
@@ -12,12 +14,16 @@ import otoroshi.next.models.NgRoute
 import otoroshi.next.plugins._
 import otoroshi.next.plugins.api._
 import otoroshi.next.proxy.NgProxyEngineError
+import otoroshi.storage.drivers.inmemory.S3Configuration
 import otoroshi.utils.TypedMap
 import otoroshi.utils.syntax.implicits._
 import otoroshi.wasm._
 import play.api.libs.json._
 import play.api.libs.ws.DefaultWSCookie
 import play.api.mvc._
+import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.regions.providers.AwsRegionProvider
 
 import java.io.File
 import java.nio.file.Files
@@ -135,6 +141,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     "module_path",
     "module",
     "headers",
+    ""
   )
 
   override def configSchema: Option[JsObject] = Some(Json.obj(
@@ -180,6 +187,43 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       }
     }
   }
+
+  private def s3ClientSettingsAttrs(conf: S3Configuration): Attributes = {
+    val awsCredentials = StaticCredentialsProvider.create(
+      AwsBasicCredentials.create(conf.access, conf.secret)
+    )
+    val settings       = S3Settings(
+      bufferType = MemoryBufferType,
+      credentialsProvider = awsCredentials,
+      s3RegionProvider = new AwsRegionProvider {
+        override def getRegion: Region = Region.of(conf.region)
+      },
+      listBucketApiVersion = ApiVersion.ListBucketVersion2
+    ).withEndpointUrl(conf.endpoint)
+    S3Attributes.settings(settings)
+  }
+
+  private def fileContent(key: String, config: S3Configuration)(implicit
+                                                                ec: ExecutionContext,
+                                                                mat: Materializer
+  ): Future[Option[(ObjectMetadata, ByteString)]] = {
+    S3.download(config.bucket, key)
+      .withAttributes(s3ClientSettingsAttrs(config))
+      .runWith(Sink.headOption)
+      .map(_.flatten)
+      .flatMap { opt =>
+        opt
+          .map {
+            case (source, om) => {
+              source.runFold(ByteString.empty)(_ ++ _).map { content =>
+                (om, content).some
+              }
+            }
+          }
+          .getOrElse(None.vfuture)
+      }
+  }
+
 
   private def pluginNotFound(request: RequestHeader, route: NgRoute, attrs: TypedMap)(implicit env: Env, ec: ExecutionContext): Future[Result] = {
     Errors
@@ -286,6 +330,19 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
         } else if (path.startsWith("'inline module';") || path.startsWith("\"inline module\";")) {
           modulesCache.put(path, path)
           path.vfuture
+        } else if (path.startsWith("s3://")) {
+          val config = S3Configuration.format.reads(JsObject(pluginConfig.headers.mapValues(_.json))).get
+          fileContent(pluginConfig.module.replaceFirst("s3://", ""), config)(env.otoroshiExecutionContext, env.otoroshiMaterializer).flatMap {
+            case None => getDefaultCode(pluginConfig).map { code =>
+              modulesCache.put(pluginConfig.module, code)
+              code
+            }
+            case Some((_, codeRaw)) => {
+              val code = codeRaw.utf8String
+              modulesCache.put(path, code)
+              code.vfuture
+            }
+          }
         } else {
           getDefaultCode(pluginConfig).map { code =>
             modulesCache.put(pluginConfig.module, code)
