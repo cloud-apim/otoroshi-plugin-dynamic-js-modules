@@ -141,7 +141,6 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     "module_path",
     "module",
     "headers",
-    ""
   )
 
   override def configSchema: Option[JsObject] = Some(Json.obj(
