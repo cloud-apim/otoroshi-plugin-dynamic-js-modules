@@ -1,9 +1,9 @@
 package otoroshi_plugins.com.cloud.apim.plugins.jsdynmodules
 
+import akka.stream.alpakka.s3._
 import akka.stream.alpakka.s3.scaladsl.S3
+import akka.stream.scaladsl.Sink
 import akka.stream.{Attributes, Materializer}
-import akka.stream.alpakka.s3.{ApiVersion, MemoryBufferType, ObjectMetadata, S3Attributes, S3Settings}
-import akka.stream.scaladsl.{Sink, StreamConverters}
 import akka.util.ByteString
 import com.github.blemale.scaffeine.Scaffeine
 import io.otoroshi.wasm4s.scaladsl._
@@ -28,7 +28,6 @@ import software.amazon.awssdk.regions.providers.AwsRegionProvider
 
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.atomic.AtomicReference
 import scala.concurrent._
 import scala.concurrent.duration._
 import scala.util._
@@ -180,10 +179,11 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           description = "This plugin provides the runtime for the Dynamic Js Module Runtime plugin from Cloud APIM",
           config = WasmConfig(
             source = WasmSource(WasmSourceKind.ClassPath, "wasm/otoroshi-plugin-dynamic-js-modules-runtime.wasm", Json.obj()),
-            memoryPages = 60,
+            memoryPages = 200,
             wasi = true,
             allowedHosts = Seq("*"),
-            authorizations = WasmAuthorizations().copy(httpAccess = true)
+            authorizations = WasmAuthorizations().copy(httpAccess = true),
+            instances = 4
           )
         )).map(_ => ())
       }
@@ -651,8 +651,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiResponse.cookies),
                   )
                 case Left(value) => NgPluginHttpResponseHelper.fromResult(Results.BadRequest(value))
-              }.andThen { case _ =>
-                vm.release()
+              }.andThen {
+                case _ => vm.release()
               }
           }
         })
