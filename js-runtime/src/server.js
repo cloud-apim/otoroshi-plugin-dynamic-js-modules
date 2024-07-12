@@ -10,7 +10,7 @@ const port = 3004
 let storage = {};
 
 app.post('/apis/v1/logger/_rpc', (req, res) => {
-  console.log('logger', req.body)
+  console.log('logger', req.body, req.headers)
   res.status(204).send('')
 })
 

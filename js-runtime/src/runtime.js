@@ -1,4 +1,4 @@
-function eval_externalApiCode(externalApiUrl, externalApiHeaders) {
+function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
   if (externalApiUrl) {
     return `
       const host_api = (function() {
@@ -12,9 +12,11 @@ function eval_externalApiCode(externalApiUrl, externalApiHeaders) {
             headers: {
               'Accept': 'application/json',
               'Content-Type': 'application/json',
+              'X-Wasm-Module': '${module}',
               ...externalApiHeaders
             },
           }, JSON.stringify({
+            module: '${module}',
             level,
             messages,
           }));
@@ -28,6 +30,7 @@ function eval_externalApiCode(externalApiUrl, externalApiHeaders) {
             headers: {
               'Accept': 'application/json',
               'Content-Type': 'application/json',
+              'X-Wasm-Module': '${module}',
               ...externalApiHeaders
             },
           }, JSON.stringify({
@@ -70,8 +73,8 @@ function eval_externalApiCode(externalApiUrl, externalApiHeaders) {
   }
 }
 
-function eval_source(src, externalApiUrl, externalApiHeaders) {
-  const externalApiCode = eval_externalApiCode(externalApiUrl, externalApiHeaders)
+function eval_source(src, module, externalApiUrl, externalApiHeaders) {
+  const externalApiCode = eval_externalApiCode(module, externalApiUrl, externalApiHeaders)
   // TODO: remove all global objects from extism
   const code = `(function() {
     var exports = {};
@@ -201,8 +204,13 @@ function cloud_apim_module_plugin_execute(phase, idx) {
     const inputStr = Host.inputString();
     const inputJson = JSON.parse(inputStr);
     const code = inputJson.code;
-    const cleanedInput = inputJson;
-    const exps = eval_source(code, inputJson.externalApiUrl, inputJson.externalApiHeaders || {});
+    const module = inputJson.module;
+    const cleanedInput = { ...inputJson };
+    delete cleanedInput.code;
+    delete cleanedInput.module;
+    delete cleanedInput.externalApiUrl;
+    delete cleanedInput.externalApiHeaders;
+    const exps = eval_source(code, module, inputJson.externalApiUrl, inputJson.externalApiHeaders || {});
     if (exps[phase]) {
       const result = exps[phase](cleanedInput);
       if (result) {
@@ -248,30 +256,30 @@ function cloud_apim_module_plugin_execute(phase, idx) {
   }
 }
 
-function execute_on_validate() {
-  cloud_apim_module_plugin_execute('on_validate', 1);
+function cloud_apim_module_plugin_execute_on_validate() {
+  cloud_apim_module_plugin_execute('on_validate');
 }
 
-function execute_on_request() {
-  cloud_apim_module_plugin_execute('on_request', 2);
+function cloud_apim_module_plugin_execute_on_request() {
+  cloud_apim_module_plugin_execute('on_request');
 }
 
 function cloud_apim_module_plugin_execute_on_backend_call() {
-  cloud_apim_module_plugin_execute('on_backend_call', 3);
+  cloud_apim_module_plugin_execute('on_backend_call');
 }
 
-function execute_on_response() {
-  cloud_apim_module_plugin_execute('on_response', 4);
+function cloud_apim_module_plugin_execute_on_response() {
+  cloud_apim_module_plugin_execute('on_response');
 }
 
-function execute_on_error() {
-  cloud_apim_module_plugin_execute('on_error', 5);
+function cloud_apim_module_plugin_execute_on_error() {
+  cloud_apim_module_plugin_execute('on_error');
 }
 
 module.exports = { 
-  cloud_apim_module_plugin_execute_on_validate: execute_on_validate,
-  cloud_apim_module_plugin_execute_on_request: execute_on_request,
-  cloud_apim_module_plugin_execute_on_backend_call: cloud_apim_module_plugin_execute_on_backend_call,
-  cloud_apim_module_plugin_execute_on_response: execute_on_response,
-  cloud_apim_module_plugin_execute_on_error: execute_on_error,
+  cloud_apim_module_plugin_execute_on_validate,
+  cloud_apim_module_plugin_execute_on_request,
+  cloud_apim_module_plugin_execute_on_backend_call,
+  cloud_apim_module_plugin_execute_on_response,
+  cloud_apim_module_plugin_execute_on_error,
 };

@@ -407,6 +407,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   "cloud_apim_module_plugin_execute_on_validate",
                   Json.obj(
                     "code" -> code,
+                    "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -467,6 +468,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   "cloud_apim_module_plugin_execute_on_backend_call",
                   Json.obj(
                     "code" -> code,
+                    "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -524,6 +526,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   "cloud_apim_module_plugin_execute_on_request",
                   Json.obj(
                     "code" -> code,
+                    "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
                     "raw_request" -> ctx.rawRequest.json,
@@ -592,6 +595,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   "cloud_apim_module_plugin_execute_on_response",
                   Json.obj(
                     "code" -> code,
+                    "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
                     "raw_response" -> ctx.rawResponse.json,
@@ -658,6 +662,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   "cloud_apim_module_plugin_execute_on_error",
                   Json.obj(
                     "code" -> code,
+                    "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
                     "cause_id" -> ctx.maybeCauseId.map(JsString.apply).getOrElse(JsNull).asValue,

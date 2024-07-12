@@ -1,6 +1,6 @@
 exports.on_backend_call = function(ctx) {
   const name = (ctx.request.query.name && ctx.request.query.name[0]) ? ctx.request.query.name[0] : 'World';
-  host_api.console.log('on_backend_call', 'log', 'err');
+  host_api.console.log('on_backend_call', 'log', ctx);
   const item = host_api.storage.getItem('foo');
   if (!item) {
     host_api.console.error('item not found in storage !');
