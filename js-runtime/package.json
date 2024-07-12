@@ -6,9 +6,13 @@
   "license": "Apache-2.0",
   "private": false,
   "scripts": {
-    "build": "node esbuild.js && extism-js dist/runtime.js -i src/runtime.d.ts -o dist/otoroshi-plugin-dynamic-js-modules-runtime.wasm"
+    "build": "node esbuild.js && extism-js dist/runtime.js -i src/runtime.d.ts -o dist/otoroshi-plugin-dynamic-js-modules-runtime.wasm",
+    "server": "nodemon src/server.js"
   },
   "dependencies": {
-    "esbuild": "0.20.0"
+    "body-parser": "^1.20.2",
+    "esbuild": "0.20.0",
+    "express": "^4.19.2",
+    "nodemon": "^3.1.4"
   }
 }
