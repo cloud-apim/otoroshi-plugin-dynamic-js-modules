@@ -48,6 +48,15 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
             throw new Error(responseBody.error, { cause: responseBody.error_description })
           }
         }
+        
+        console.old_log = console.log;
+        console.log = (...args) => raw_log('info', ...args);
+        
+        console.old_error = console.error;
+        console.error = (...args) => raw_log('error', ...args);
+        
+        console.old_info = console.info;
+        console.info = (...args) => raw_log('info', ...args);
       
         return {
           console: {
@@ -58,7 +67,8 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
             debug: (...args) => raw_log('debug', ...args),
           },
           storage: {
-            findAllItems: () => raw_storage('find', '.*', null),
+            allItems: () => raw_storage('find', '.*', null),
+            allKeys: () => raw_storage('find', '.*', null).map(item => item.key),
             findItems: (pattern) => raw_storage('find', pattern, null),
             getItem: (key) => raw_storage('get', key, null),
             removeItem: (key) => raw_storage('remove', key, null),
