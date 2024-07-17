@@ -52,17 +52,17 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
         console.old_log = console.log;
         console.log = (...args) => raw_log('info', ...args);
         
-        console.old_error = console.error;
-        console.error = (...args) => raw_log('error', ...args);
-        
-        console.old_info = console.info;
-        console.info = (...args) => raw_log('info', ...args);
+        //console.old_error = console.error;
+        //console.error = (...args) => raw_log('error', ...args);
+        //console.old_info = console.info;
+        //console.info = (...args) => raw_log('info', ...args);
       
         return {
           console: {
             raw: (level, ...args) => raw_log(level, ...args),
             log: (...args) => raw_log('info', ...args),
             info: (...args) => raw_log('info', ...args),
+            warn: (...args) => raw_log('warn', ...args),
             error: (...args) => raw_log('error', ...args),
             debug: (...args) => raw_log('debug', ...args),
           },
