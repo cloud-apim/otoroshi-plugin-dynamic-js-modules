@@ -22,8 +22,11 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
           }));
         }
         
-        function raw_storage(operation, key, value) {
-          let finalValue = value;
+        function raw_storage(operation, key, value, opts) {
+          let finalValue = value || null;
+          if (finalValue && !(typeof finalValue === 'string' || finalValue instanceof String)) {
+            finalValue = JSON.stringify(finalValue);
+          }
           const response = Http.request({
             url: '${externalApiUrl}/apis/v1/storage/_rpc',
             method: 'POST',
@@ -37,13 +40,14 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
             operation,
             key,
             value: finalValue,
+            opts: opts || {}
           }));
           let responseBody = response.body;
           if (typeof responseBody === 'string' || responseBody instanceof String) {
             responseBody = JSON.parse(responseBody);
           }
-          if (response.status === 200 || response.status === 204) {
-            return responseBody.value || null;
+          if (response.status === 200 || response.status === 201 || response.status === 204) {
+            return responseBody ? responseBody.value || null : null;
           } else {
             throw new Error(responseBody.error, { cause: responseBody.error_description })
           }
@@ -72,7 +76,7 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
             findItems: (pattern) => raw_storage('find', pattern, null),
             getItem: (key) => raw_storage('get', key, null),
             removeItem: (key) => raw_storage('remove', key, null),
-            setItem: (key, value) => raw_storage('set', key, value),
+            setItem: (key, value, opts) => raw_storage('set', key, value, opts),
             clear: () => raw_storage('clear', null, null),
           }
         };
@@ -83,11 +87,15 @@ function eval_externalApiCode(module, externalApiUrl, externalApiHeaders) {
   }
 }
 
-function eval_source(src, module, externalApiUrl, externalApiHeaders) {
+function eval_source(src, module, env, externalApiUrl, externalApiHeaders) {
   const externalApiCode = eval_externalApiCode(module, externalApiUrl, externalApiHeaders)
   // TODO: remove all global objects from extism
   const code = `(function() {
     var exports = {};
+    
+    var process = {
+      env: ${JSON.stringify(env)}
+    };
 
     function FakeResolvedPromise(result) {
       return {
@@ -220,7 +228,7 @@ function cloud_apim_module_plugin_execute(phase, idx) {
     delete cleanedInput.module;
     delete cleanedInput.externalApiUrl;
     delete cleanedInput.externalApiHeaders;
-    const exps = eval_source(code, module, inputJson.externalApiUrl, inputJson.externalApiHeaders || {});
+    const exps = eval_source(code, module, inputJson.env || {}, inputJson.externalApiUrl, inputJson.externalApiHeaders || {});
     if (exps[phase]) {
       const result = exps[phase](cleanedInput);
       if (result) {
