@@ -20,17 +20,17 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18.x'
-      - name: install extism js pdk
-        run: |
-          curl -O https://raw.githubusercontent.com/extism/js-pdk/main/install.sh
-          sh install.sh
+      #- name: install extism js pdk
+      #  run: |
+      #    curl -O https://raw.githubusercontent.com/extism/js-pdk/main/install.sh
+      #    sh install.sh
       - uses: coursier/cache-action@v5
-      - name: build-runtime
-        id: build-runtime
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          sh ./build-js-runtime.sh
+      #- name: build-runtime
+      #  id: build-runtime
+      #  env:
+      #    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #  run: |
+      #    sh ./build-js-runtime.sh
       - name: change version
         run: |
           echo 'ThisBuild / version := "${{ inputs.version }}"' > version.sbt
