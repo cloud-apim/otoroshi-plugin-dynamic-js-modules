@@ -24,7 +24,7 @@ jobs:
       #  run: |
       #    curl -O https://raw.githubusercontent.com/extism/js-pdk/main/install.sh
       #    sh install.sh
-      - uses: coursier/cache-action@v5
+      - uses: coursier/cache-action@v6
       #- name: build-runtime
       #  id: build-runtime
       #  env:
