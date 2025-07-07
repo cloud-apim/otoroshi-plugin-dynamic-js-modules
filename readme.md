@@ -1,6 +1,6 @@
 # Cloud APIM dynamic js modules 
 
-This project provides a new kind of Otoroshi plugin that let you run JS embbeded in a WASM runtime without the compilation phase that is mandatory with the classic WASM plugin
+This project provides a new kind of [Otoroshi](https://github.com/MAIF/otoroshi) plugin that let you run JS embbeded in a WASM runtime without the compilation phase that is mandatory with the classic WASM plugin
 
 Here with the `Js Module plugin` you just have to specify the name of the module and where to get it and you're fine
 
