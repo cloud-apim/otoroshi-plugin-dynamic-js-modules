@@ -10,7 +10,7 @@ lazy val root = (project in file("."))
     name := "otoroshi-plugin-dynamic-js-modules",
     resolvers += "jitpack" at "https://jitpack.io",
     libraryDependencies ++= Seq(
-      "fr.maif" %% "otoroshi" % "17.11.0" % "provided" excludeAll(ExclusionRule("fr.maif", "wasm4s")),
+      "fr.maif" %% "otoroshi" % "17.12.0" % "provided" excludeAll(ExclusionRule("fr.maif", "wasm4s")),
       "fr.maif" %% "wasm4s" % "4.1.2" classifier "bundle",
       munit % Test
     )
