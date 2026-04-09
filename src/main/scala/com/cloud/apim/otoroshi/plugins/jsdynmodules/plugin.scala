@@ -2,7 +2,7 @@ package otoroshi_plugins.com.cloud.apim.plugins.jsdynmodules
 
 import akka.stream.alpakka.s3._
 import akka.stream.alpakka.s3.scaladsl.S3
-import akka.stream.scaladsl.Sink
+import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.{Attributes, Materializer}
 import akka.util.ByteString
 import com.github.blemale.scaffeine.Scaffeine
@@ -14,6 +14,7 @@ import otoroshi.next.models.NgRoute
 import otoroshi.next.plugins._
 import otoroshi.next.plugins.api._
 import otoroshi.next.proxy.NgProxyEngineError
+import otoroshi.next.utils.JsonHelpers
 import otoroshi.storage.drivers.inmemory.S3Configuration
 import otoroshi.utils.TypedMap
 import otoroshi.utils.syntax.implicits._
@@ -219,6 +220,60 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           )
         )).map(_ => ())
       }
+    }
+  }
+
+  private def requestBody(request: NgPluginHttpRequest)(implicit ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
+    if (request.hasBody) {
+      request.body.runFold(ByteString.empty)(_ ++ _).map { b =>
+        val arr = b.toArray[Byte]
+        (Writes.arrayWrites[Byte].writes(arr), Some(b))
+      }
+    } else {
+      (JsNull, None).vfuture
+    }
+  }
+
+  private def responseBody(
+                            response: NgPluginHttpResponse
+                          )(implicit ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+    response.body.runFold(ByteString.empty)(_ ++ _).map { b =>
+      val arr = b.toArray[Byte]
+      if (arr.isEmpty) {
+        (JsNull, b)
+      } else {
+        (Writes.arrayWrites[Byte].writes(arr), b)
+      }
+    }
+  }
+
+  private def requestJson(ctx: NgTransformerRequestContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
+    requestBody(ctx.otoroshiRequest).map {
+      case (bodyOut, bytesOut) =>
+        (ctx.json.asObject ++ Json.obj(
+          "route"               -> ctx.route.json,
+          "request_body_bytes" -> bodyOut
+        ), bytesOut)
+    }
+  }
+
+  private def responseJson(ctx: NgTransformerResponseContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+    responseBody(ctx.otoroshiResponse).map {
+      case (bodyOut, bytesOut) =>
+        (ctx.json.asObject ++ Json.obj(
+          "route"               -> ctx.route.json,
+          "response_body_bytes" -> bodyOut
+        ), bytesOut)
+    }
+  }
+
+  private def responseErrorJson(ctx: NgTransformerErrorContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+    responseBody(ctx.otoroshiResponse).map {
+      case (bodyOut, bytesOut) =>
+        (ctx.json.asObject ++ Json.obj(
+          "route"               -> ctx.route.json,
+          "response_body_bytes" -> bodyOut
+        ), bytesOut)
     }
   }
 
@@ -526,8 +581,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       .getOrElse(JsModulePluginConfig.default)
     val wasmConfig = pluginConfig.wasmConfig()
     getCode(pluginConfig).flatMap { code =>
-      ctx.wasmJson
-        .flatMap(input => {
+      requestJson(ctx).flatMap {
+        case (input, bodyBytesOpt) => {
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => Left(r))
             case Some((vm, localConfig)) =>
@@ -556,9 +611,9 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   AttrsHelper.updateAttrs(ctx.attrs, response)
                   val body = BodyHelper.extractBodyFromOpt(response)
                   if (response.select("error").asOpt[Boolean].getOrElse(false)) {
-                    val status      = response.select("status").asOpt[Int].getOrElse(500)
-                    val headers     = (response \ "headers").asOpt[Map[String, String]].getOrElse(Map.empty)
-                    val cookies     = WasmUtils.convertJsonPlayCookies(response).getOrElse(Seq.empty)
+                    val status = response.select("status").asOpt[Int].getOrElse(500)
+                    val headers = (response \ "headers").asOpt[Map[String, String]].getOrElse(Map.empty)
+                    val cookies = WasmUtils.convertJsonPlayCookies(response).getOrElse(Seq.empty)
                     val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
                     Results
                       .Status(status)(body.getOrElse(ByteString.empty))
@@ -574,7 +629,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                       headers =
                         (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiRequest.headers),
                       cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiRequest.cookies),
-                      body = body.map(_.chunks(16 * 1024)).getOrElse(ctx.otoroshiRequest.body)
+                      body = body.map(_.chunks(16 * 1024)).orElse(bodyBytesOpt.map(_.chunks(16 * 1025))).getOrElse(Source.empty)
                     ).right
                   }
                 case Left(value) => Results.BadRequest(value).left
@@ -582,7 +637,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                 vm.release()
               }
           }
-        })
+        }
+      }
     }.recover {
       case t: Throwable =>
         logger.error("plugin error on transform request phase", t)
@@ -596,8 +652,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       .getOrElse(JsModulePluginConfig.default)
     val wasmConfig = pluginConfig.wasmConfig()
     getCode(pluginConfig).flatMap { code =>
-      ctx.wasmJson
-        .flatMap(input => {
+      responseJson(ctx).flatMap {
+        case (input, bodyBytes) =>
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => Left(r))
             case Some((vm, localConfig)) =>
@@ -641,7 +697,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                       status = (response \ "status").asOpt[Int].getOrElse(200),
                       headers =
                         (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiResponse.headers),
-                      body = body.map(_.chunks(16 * 1024)).getOrElse(ctx.otoroshiResponse.body),
+                      body = body.map(_.chunks(16 * 1024)).getOrElse(bodyBytes.chunks(16 * 1024)),
                       cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiResponse.cookies),
                     ).right
                   }
@@ -650,7 +706,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                 vm.release()
               }
           }
-        })
+        }
     }.recover {
       case t: Throwable =>
         logger.error("plugin error on transform response phase", t)
@@ -664,50 +720,52 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       .getOrElse(JsModulePluginConfig.default)
     val wasmConfig = pluginConfig.wasmConfig()
     getCode(pluginConfig).flatMap { code =>
-      NgTransformerErrorContextHelper.wasmJson(ctx)
-        .flatMap(input => {
-          env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
-            case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => NgPluginHttpResponseHelper.fromResult(r))
-            case Some((vm, localConfig)) =>
-              vm.call(
-                WasmFunctionParameters.ExtismFuntionCall(
-                  "cloud_apim_module_plugin_execute_on_error",
-                  Json.obj(
-                    "code" -> code,
-                    "env" -> pluginConfig.env,
-                    "module" -> pluginConfig.modulePath,
-                    "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
-                    "cause_id" -> ctx.maybeCauseId.map(JsString.apply).getOrElse(JsNull).asValue,
-                    "call_attempts" -> ctx.callAttempts,
-                    "message" -> ctx.message,
-                    "otoroshi_response" -> ctx.otoroshiResponse.json,
-                    "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
-                    "snowflake" -> ctx.snowflake,
-                    "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
-                    "apikey" -> ctx.apikey.map(_.lightJson).getOrElse(JsNull).asValue,
-                    "user" -> ctx.user.map(_.lightJson).getOrElse(JsNull).asValue,
-                  ).stringify
-                ),
-                None
-              ).map {
-                case Right(res) =>
-                  val response = Json.parse(res._1)
-                  AttrsHelper.updateAttrs(ctx.attrs, response)
-                  val body = BodyHelper.extractBodyFromOpt(response)
-                  ctx.otoroshiResponse.copy(
-                    status = (response \ "status").asOpt[Int].getOrElse(200),
-                    headers =
-                      (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiResponse.headers),
-                    body = body.map(_.chunks(16 * 1024)).getOrElse(ctx.otoroshiResponse.body),
-                    cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiResponse.cookies),
-                  )
-                case Left(value) => NgPluginHttpResponseHelper.fromResult(Results.BadRequest(value))
-              }.andThen {
-                case _ => vm.release()
-              }
+      responseErrorJson(ctx)
+        .flatMap {
+          case (input, bodyBytes) => {
+            env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
+              case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => NgPluginHttpResponseHelper.fromResult(r))
+              case Some((vm, localConfig)) =>
+                vm.call(
+                  WasmFunctionParameters.ExtismFuntionCall(
+                    "cloud_apim_module_plugin_execute_on_error",
+                    Json.obj(
+                      "code" -> code,
+                      "env" -> pluginConfig.env,
+                      "module" -> pluginConfig.modulePath,
+                      "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
+                      "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                      "cause_id" -> ctx.maybeCauseId.map(JsString.apply).getOrElse(JsNull).asValue,
+                      "call_attempts" -> ctx.callAttempts,
+                      "message" -> ctx.message,
+                      "otoroshi_response" -> ctx.otoroshiResponse.json,
+                      "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
+                      "snowflake" -> ctx.snowflake,
+                      "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
+                      "apikey" -> ctx.apikey.map(_.lightJson).getOrElse(JsNull).asValue,
+                      "user" -> ctx.user.map(_.lightJson).getOrElse(JsNull).asValue,
+                    ).stringify
+                  ),
+                  None
+                ).map {
+                  case Right(res) =>
+                    val response = Json.parse(res._1)
+                    AttrsHelper.updateAttrs(ctx.attrs, response)
+                    val body = BodyHelper.extractBodyFromOpt(response)
+                    ctx.otoroshiResponse.copy(
+                      status = (response \ "status").asOpt[Int].getOrElse(200),
+                      headers =
+                        (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiResponse.headers),
+                      body = body.map(_.chunks(16 * 1024)).getOrElse(bodyBytes.chunks(16 * 1024)),
+                      cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiResponse.cookies),
+                    )
+                  case Left(value) => NgPluginHttpResponseHelper.fromResult(Results.BadRequest(value))
+                }.andThen {
+                  case _ => vm.release()
+                }
+            }
           }
-        })
+        }
     }
   }.recover {
     case t: Throwable =>
