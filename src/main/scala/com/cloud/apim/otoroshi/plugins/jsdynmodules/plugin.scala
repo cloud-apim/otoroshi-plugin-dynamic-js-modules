@@ -257,6 +257,16 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
+  private def brequestJson(ctx: NgbBackendCallContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
+    requestBody(ctx.request).map {
+      case (bodyOut, bytesOut) =>
+        (ctx.json.asObject ++ Json.obj(
+          "route"               -> ctx.route.json,
+          "request_body_bytes" -> bodyOut
+        ), bytesOut)
+    }
+  }
+
   private def responseJson(ctx: NgTransformerResponseContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
     responseBody(ctx.otoroshiResponse).map {
       case (bodyOut, bytesOut) =>
@@ -522,8 +532,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       .getOrElse(JsModulePluginConfig.default)
     val wasmConfig = pluginConfig.wasmConfig()
     getCode(pluginConfig).flatMap { code =>
-      ctx.wasmJson
-        .flatMap(input => {
+      brequestJson(ctx).flatMap {
+        case (input, bodyBytesOpt) => {
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.rawRequest, ctx.route, ctx.attrs).map(r => NgProxyEngineError.NgResultProxyEngineError(r).left)
             case Some((vm, localConfig)) =>
@@ -567,7 +577,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                 vm.release()
               }
           }
-        })
+        }}
     }.recover {
       case t: Throwable =>
         logger.error("plugin error on backend call phase", t)
