@@ -258,6 +258,8 @@ function cloud_apim_module_plugin_execute(phase, idx) {
         Host.outputString(JSON.stringify(inputJson.otoroshi_response));
       } else if (phase === 'on_error') {
         Host.outputString(JSON.stringify({ ...inputJson.otoroshi_response }));
+      } else {
+        Host.outputString('null');
       }
     }
   } catch(e) {
@@ -294,10 +296,15 @@ function cloud_apim_module_plugin_execute_on_error() {
   cloud_apim_module_plugin_execute('on_error');
 }
 
+function cloud_apim_module_plugin_execute_user_function() {
+  cloud_apim_module_plugin_execute('main');
+}
+
 module.exports = { 
   cloud_apim_module_plugin_execute_on_validate,
   cloud_apim_module_plugin_execute_on_request,
   cloud_apim_module_plugin_execute_on_backend_call,
   cloud_apim_module_plugin_execute_on_response,
   cloud_apim_module_plugin_execute_on_error,
+  cloud_apim_module_plugin_execute_user_function
 };
