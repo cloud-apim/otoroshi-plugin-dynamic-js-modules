@@ -173,8 +173,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     ),
     "module" -> Json.obj(
       "type" -> "any",
-      "label" -> "Module url or inline code",
-      "help" -> "Put module URL or inline code here. Start your inline code with 'inline module';\\n ",
+      "label" -> "Module code or URL",
+      "help" -> "Put module URL or inline code here. Start your inline code with 'inline module';\\n to make it work as expected !",
       "props" -> Json.obj(
         "height" -> "300px",
         "language" -> "javascript",
