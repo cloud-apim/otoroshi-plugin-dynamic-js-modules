@@ -159,11 +159,11 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
   override def configFlow: Seq[String] = Seq(
     "runtime_ref",
     "module_path",
-    "module",
     "headers",
     "env",
     "external_api_url",
     "external_api_headers",
+    "module",
   )
 
   override def configSchema: Option[JsObject] = Some(Json.obj(
@@ -172,8 +172,15 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       "label" -> "Runtime wasm plugin",
     ),
     "module" -> Json.obj(
-      "type" -> "string",
+      "type" -> "any",
       "label" -> "Module url",
+      "props" -> Json.obj(
+        "height" -> "300px",
+        "language" -> "javascript",
+        "config" -> Json.obj(
+          "lineNumbers" -> true
+        )
+      )
     ),
     "module_path" -> Json.obj(
       "type" -> "string",
@@ -262,7 +269,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       case (bodyOut, bytesOut) =>
         (ctx.json.asObject ++ Json.obj(
           "route"               -> ctx.route.json,
-          "request_body_bytes" -> bodyOut
+          "request_body_bytes" -> bodyOut,
+          "request"            -> ctx.request.json
         ), bytesOut)
     }
   }
