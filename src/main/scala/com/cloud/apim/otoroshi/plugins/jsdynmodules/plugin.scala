@@ -5,6 +5,7 @@ import akka.stream.alpakka.s3.scaladsl.S3
 import akka.stream.scaladsl.{Sink, Source}
 import akka.stream.{Attributes, Materializer}
 import akka.util.ByteString
+import com.cloud.apim.otoroshi.plugins.jsdynmodules.WorkflowFunctionsInitializer
 import com.github.blemale.scaffeine.Scaffeine
 import io.otoroshi.wasm4s.scaladsl._
 import otoroshi.env.Env
@@ -211,6 +212,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     implicit val ev = env
     implicit val ec = env.otoroshiExecutionContext
     env.logger.info("[Cloud APIM] the 'Dynamic Js Module' plugin is available !")
+    WorkflowFunctionsInitializer.initDefaults()
     env.datastores.wasmPluginsDataStore.findById(JsModulePlugin.wasmPluginId).flatMap {
       case Some(_) => ().vfuture
       case None => {
