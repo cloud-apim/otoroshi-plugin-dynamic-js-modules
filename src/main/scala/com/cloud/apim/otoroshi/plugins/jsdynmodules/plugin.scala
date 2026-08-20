@@ -1,68 +1,44 @@
 package otoroshi_plugins.com.cloud.apim.plugins.jsdynmodules
 
-import akka.stream.alpakka.s3._
-import akka.stream.alpakka.s3.scaladsl.S3
-import akka.stream.scaladsl.{Sink, Source}
-import akka.stream.{Attributes, Materializer}
-import akka.util.ByteString
 import com.cloud.apim.otoroshi.plugins.jsdynmodules.WorkflowFunctionsInitializer
 import com.github.blemale.scaffeine.Scaffeine
-import io.otoroshi.wasm4s.scaladsl._
+import io.otoroshi.wasm4s.scaladsl.*
+import org.apache.pekko.stream.connectors.s3.scaladsl.S3
+import org.apache.pekko.stream.connectors.s3.{ApiVersion, MemoryBufferType, ObjectMetadata, S3Attributes, S3Exception, S3Settings}
+import org.apache.pekko.stream.scaladsl.{Keep, Sink, Source}
+import org.apache.pekko.stream.{Attributes, Materializer}
+import org.apache.pekko.util.ByteString
 import otoroshi.env.Env
 import otoroshi.gateway.Errors
 import otoroshi.models.WasmPlugin
 import otoroshi.next.models.NgRoute
-import otoroshi.next.plugins._
-import otoroshi.next.plugins.api._
+import otoroshi.next.plugins.*
+import otoroshi.next.plugins.api.*
 import otoroshi.next.proxy.NgProxyEngineError
 import otoroshi.next.utils.JsonHelpers
 import otoroshi.storage.drivers.inmemory.S3Configuration
 import otoroshi.utils.TypedMap
-import otoroshi.utils.syntax.implicits._
-import otoroshi.wasm._
+import otoroshi.utils.syntax.implicits.*
+import otoroshi.wasm.*
 import play.api.Logger
-import play.api.libs.json._
-import play.api.libs.ws.DefaultWSCookie
-import play.api.mvc._
+import play.api.libs.json.*
+import play.api.mvc.*
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.regions.providers.AwsRegionProvider
 
 import java.io.File
 import java.nio.file.Files
-import scala.concurrent._
-import scala.concurrent.duration._
-import scala.util._
+import scala.concurrent.*
+import scala.concurrent.duration.*
+import scala.util.*
 
-object NgTransformerErrorContextHelper {
-  def wasmJson(ctx: NgTransformerErrorContext)(implicit env: Env, ec: ExecutionContext): Future[JsValue] = {
-    implicit val mat = env.otoroshiMaterializer
-    otoroshi.next.utils.JsonHelpers.responseBody(ctx.otoroshiResponse).map { bodyOut =>
-      ctx.json.asObject ++ Json.obj(
-        "route"               -> ctx.route.json,
-        "response_body_bytes" -> bodyOut
-      )
-    }
-  }
-}
-
-object NgPluginHttpResponseHelper {
-  def fromResult(result: Result): NgPluginHttpResponse = {
-    NgPluginHttpResponse(
-      status = result.header.status,
-      headers = result.header.headers,
-      cookies = result.newCookies.map(c => DefaultWSCookie(
-        name = c.name,
-        value = c.value,
-        maxAge = c.maxAge.map(_.toLong),
-        path = Option(c.path),
-        domain = c.domain,
-        secure = c.secure,
-        httpOnly = c.httpOnly,
-      )),
-      body = result.body.dataStream,
-    )
-  }
+/**
+ * `Map.mapValues` has returned a lazy `MapView` since Scala 2.13, which `JsObject` does not accept,
+ * so every string map turned into json goes through this.
+ */
+extension (headers: Map[String, String]) {
+  def jsonObject: JsObject = JsObject(headers.view.mapValues(_.json).toMap)
 }
 
 case class JsModulePluginConfig(
@@ -101,7 +77,7 @@ object JsModulePluginConfig {
       "headers" -> o.headers,
       "env" -> o.env,
       "external_api_url" -> o.externalApiUrl.map(JsString.apply).getOrElse(JsNull).asValue,
-      "external_api_headers" -> o.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+      "external_api_headers" -> o.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
     )
     override def reads(json: JsValue): JsResult[JsModulePluginConfig] = Try {
       JsModulePluginConfig(
@@ -206,11 +182,11 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     )
   ))
 
-  private val modulesCache = Scaffeine().maximumSize(1000).expireAfterWrite(120.seconds).build[String, String]
+  private val modulesCache = Scaffeine().maximumSize(1000).expireAfterWrite(120.seconds).build[String, String]()
 
   override def start(env: Env): Future[Unit] = {
-    implicit val ev = env
-    implicit val ec = env.otoroshiExecutionContext
+    given Env              = env
+    given ExecutionContext = env.otoroshiExecutionContext
     env.logger.info("[Cloud APIM] the 'Dynamic Js Module' plugin is available !")
     WorkflowFunctionsInitializer.initDefaults()
     env.datastores.wasmPluginsDataStore.findById(JsModulePlugin.wasmPluginId).flatMap {
@@ -233,20 +209,9 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  private def requestBody(request: NgPluginHttpRequest)(implicit ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
-    if (request.hasBody) {
-      request.body.runFold(ByteString.empty)(_ ++ _).map { b =>
-        val arr = b.toArray[Byte]
-        (Writes.arrayWrites[Byte].writes(arr), Some(b))
-      }
-    } else {
-      (JsNull, None).vfuture
-    }
-  }
-
   private def responseBody(
                             response: NgPluginHttpResponse
-                          )(implicit ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+                          )(using ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
     response.body.runFold(ByteString.empty)(_ ++ _).map { b =>
       val arr = b.toArray[Byte]
       if (arr.isEmpty) {
@@ -257,8 +222,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  private def requestJson(ctx: NgTransformerRequestContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
-    requestBody(ctx.otoroshiRequest).map {
+  private def requestJson(ctx: NgTransformerRequestContext)(using ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
+    JsonHelpers.requestBody(ctx.otoroshiRequest).map {
       case (bodyOut, bytesOut) =>
         (ctx.json.asObject ++ Json.obj(
           "route"               -> ctx.route.json,
@@ -267,8 +232,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  private def brequestJson(ctx: NgbBackendCallContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
-    requestBody(ctx.request).map {
+  private def brequestJson(ctx: NgbBackendCallContext)(using ec: ExecutionContext, mat: Materializer): Future[(JsValue, Option[ByteString])] = {
+    JsonHelpers.requestBody(ctx.request).map {
       case (bodyOut, bytesOut) =>
         (ctx.json.asObject ++ Json.obj(
           "route"               -> ctx.route.json,
@@ -278,7 +243,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  private def responseJson(ctx: NgTransformerResponseContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+  private def responseJson(ctx: NgTransformerResponseContext)(using ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
     responseBody(ctx.otoroshiResponse).map {
       case (bodyOut, bytesOut) =>
         (ctx.json.asObject ++ Json.obj(
@@ -288,7 +253,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  private def responseErrorJson(ctx: NgTransformerErrorContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
+  private def responseErrorJson(ctx: NgTransformerErrorContext)(using ec: ExecutionContext, mat: Materializer): Future[(JsValue, ByteString)] = {
     responseBody(ctx.otoroshiResponse).map {
       case (bodyOut, bytesOut) =>
         (ctx.json.asObject ++ Json.obj(
@@ -313,29 +278,27 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     S3Attributes.settings(settings)
   }
 
-  private def fileContent(key: String, config: S3Configuration)(implicit
+  // pekko-connectors-s3 no longer exposes S3.download, so the object is streamed through
+  // S3.getObject and folded into a single ByteString, like otoroshi does in its own S3 plugin.
+  private def fileContent(key: String, config: S3Configuration)(using
                                                                 ec: ExecutionContext,
                                                                 mat: Materializer
   ): Future[Option[(ObjectMetadata, ByteString)]] = {
-    S3.download(config.bucket, key)
+    val (metadataFuture, contentFuture) = S3
+      .getObject(config.bucket, key)
       .withAttributes(s3ClientSettingsAttrs(config))
-      .runWith(Sink.headOption)
-      .map(_.flatten)
-      .flatMap { opt =>
-        opt
-          .map {
-            case (source, om) => {
-              source.runFold(ByteString.empty)(_ ++ _).map { content =>
-                (om, content).some
-              }
-            }
-          }
-          .getOrElse(None.vfuture)
-      }
+      .toMat(Sink.fold(ByteString.empty)(_ ++ _))(Keep.both)
+      .run()
+    for {
+      metadata <- metadataFuture
+      content  <- contentFuture
+    } yield (metadata, content).some
+  }.recover { case _: S3Exception =>
+    None
   }
 
 
-  private def pluginNotFound(request: RequestHeader, route: NgRoute, attrs: TypedMap)(implicit env: Env, ec: ExecutionContext): Future[Result] = {
+  private def pluginNotFound(request: RequestHeader, route: NgRoute, attrs: TypedMap)(using env: Env, ec: ExecutionContext): Future[Result] = {
     Errors
       .craftResponseResult(
         "plugin not found !",
@@ -348,7 +311,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
       )
   }
 
-  private def getDefaultCode(pluginConfig: JsModulePluginConfig)(implicit env: Env, ec: ExecutionContext): Future[String] = {
+  private def getDefaultCode(pluginConfig: JsModulePluginConfig): Future[String] = {
     s"""'inline module';
        |exports.on_validate = function(ctx) {
        |  return {
@@ -403,7 +366,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
        |""".stripMargin.vfuture
   }
 
-  private def getCode(pluginConfig: JsModulePluginConfig)(implicit env: Env, ec: ExecutionContext): Future[String] = {
+  private def getCode(pluginConfig: JsModulePluginConfig)(using env: Env, ec: ExecutionContext): Future[String] = {
     modulesCache.getIfPresent(pluginConfig.module) match {
       case Some(code) => code.vfuture
       case None => {
@@ -412,12 +375,13 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           env.Ws.url(pluginConfig.module)
             .withFollowRedirects(true)
             .withRequestTimeout(30.seconds)
-            .withHttpHeaders(pluginConfig.headers.toSeq: _*)
+            .withHttpHeaders(pluginConfig.headers.toSeq*)
             .get()
             .flatMap { response =>
               if (response.status == 200) {
-                modulesCache.put(pluginConfig.module, response.body)
-                response.body.vfuture
+                val code: String = response.body
+                modulesCache.put(pluginConfig.module, code)
+                code.vfuture
               } else {
                 getDefaultCode(pluginConfig).map { code =>
                   modulesCache.put(pluginConfig.module, code)
@@ -442,8 +406,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
           path.vfuture
         } else if (path.startsWith("s3://")) {
           logger.info(s"fetching from S3: ${path}")
-          val config = S3Configuration.format.reads(JsObject(pluginConfig.headers.mapValues(_.json))).get
-          fileContent(pluginConfig.module.replaceFirst("s3://", ""), config)(env.otoroshiExecutionContext, env.otoroshiMaterializer).flatMap {
+          val config = S3Configuration.format.reads(pluginConfig.headers.jsonObject).get
+          fileContent(pluginConfig.module.replaceFirst("s3://", ""), config)(using env.otoroshiExecutionContext, env.otoroshiMaterializer).flatMap {
             case None => {
               logger.info(s"unable to fetch from S3: ${path}")
               getDefaultCode(pluginConfig).map { code =>
@@ -475,7 +439,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  override def access(ctx: NgAccessContext)(implicit env: Env, ec: ExecutionContext): Future[NgAccess] = {
+  override def access(ctx: NgAccessContext)(using env: Env, ec: ExecutionContext): Future[NgAccess] = {
     val pluginConfig = ctx
       .cachedConfig(internalName)(JsModulePluginConfig.format)
       .getOrElse(JsModulePluginConfig.default)
@@ -485,7 +449,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
         .flatMap(input => {
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => NgAccess.NgDenied(r))
-            case Some((vm, localConfig)) =>
+            case Some((vm, _)) =>
               vm.call(
                 WasmFunctionParameters.ExtismFuntionCall(
                   "cloud_apim_module_plugin_execute_on_validate",
@@ -494,7 +458,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     "env" -> pluginConfig.env,
                     "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
                     "snowflake" -> ctx.snowflake,
                     "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -537,17 +501,17 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  override def callBackend(ctx: NgbBackendCallContext, delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]])(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
+  override def callBackend(ctx: NgbBackendCallContext, delegates: () => Future[Either[NgProxyEngineError, BackendCallResponse]])(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[NgProxyEngineError, BackendCallResponse]] = {
     val pluginConfig = ctx
       .cachedConfig(internalName)(JsModulePluginConfig.format)
       .getOrElse(JsModulePluginConfig.default)
     val wasmConfig = pluginConfig.wasmConfig()
     getCode(pluginConfig).flatMap { code =>
       brequestJson(ctx).flatMap {
-        case (input, bodyBytesOpt) => {
+        case (input, _) => {
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.rawRequest, ctx.route, ctx.attrs).map(r => NgProxyEngineError.NgResultProxyEngineError(r).left)
-            case Some((vm, localConfig)) =>
+            case Some((vm, _)) =>
               vm.call(
                 WasmFunctionParameters.ExtismFuntionCall(
                   "cloud_apim_module_plugin_execute_on_backend_call",
@@ -556,7 +520,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     "env" -> pluginConfig.env,
                     "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
                     "snowflake" -> ctx.snowflake,
                     "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -596,7 +560,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  override def transformRequest(ctx: NgTransformerRequestContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[Result, NgPluginHttpRequest]] = {
+  override def transformRequest(ctx: NgTransformerRequestContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[Result, NgPluginHttpRequest]] = {
     val pluginConfig = ctx
       .cachedConfig(internalName)(JsModulePluginConfig.format)
       .getOrElse(JsModulePluginConfig.default)
@@ -606,7 +570,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
         case (input, bodyBytesOpt) => {
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => Left(r))
-            case Some((vm, localConfig)) =>
+            case Some((vm, _)) =>
               vm.call(
                 WasmFunctionParameters.ExtismFuntionCall(
                   "cloud_apim_module_plugin_execute_on_request",
@@ -615,7 +579,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     "env" -> pluginConfig.env,
                     "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                     "raw_request" -> ctx.rawRequest.json,
                     "otoroshi_request" -> ctx.otoroshiRequest.json,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -638,8 +602,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
                     Results
                       .Status(status)(body.getOrElse(ByteString.empty))
-                      .withCookies(cookies: _*)
-                      .withHeaders(headers.toSeq: _*)
+                      .withCookies(cookies*)
+                      .withHeaders(headers.toSeq*)
                       .as(contentType)
                       .left
                   } else {
@@ -667,7 +631,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  override def transformResponse(ctx: NgTransformerResponseContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[Result, NgPluginHttpResponse]] = {
+  override def transformResponse(ctx: NgTransformerResponseContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[Either[Result, NgPluginHttpResponse]] = {
     val pluginConfig = ctx
       .cachedConfig(internalName)(JsModulePluginConfig.format)
       .getOrElse(JsModulePluginConfig.default)
@@ -677,7 +641,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
         case (input, bodyBytes) =>
           env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
             case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => Left(r))
-            case Some((vm, localConfig)) =>
+            case Some((vm, _)) =>
               vm.call(
                 WasmFunctionParameters.ExtismFuntionCall(
                   "cloud_apim_module_plugin_execute_on_response",
@@ -686,7 +650,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     "env" -> pluginConfig.env,
                     "module" -> pluginConfig.modulePath,
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                    "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                     "raw_response" -> ctx.rawResponse.json,
                     "otoroshi_response" -> ctx.otoroshiResponse.json,
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
@@ -709,8 +673,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
                     Results
                       .Status(status)(body.getOrElse(ByteString.empty))
-                      .withCookies(cookies: _*)
-                      .withHeaders(headers.toSeq: _*)
+                      .withCookies(cookies*)
+                      .withHeaders(headers.toSeq*)
                       .as(contentType)
                       .left
                   } else {
@@ -735,7 +699,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
-  override def transformError(ctx: NgTransformerErrorContext)(implicit env: Env, ec: ExecutionContext, mat: Materializer): Future[NgPluginHttpResponse] = {
+  override def transformError(ctx: NgTransformerErrorContext)(using env: Env, ec: ExecutionContext, mat: Materializer): Future[NgPluginHttpResponse] = {
     val pluginConfig = ctx
       .cachedConfig(internalName)(JsModulePluginConfig.format)
       .getOrElse(JsModulePluginConfig.default)
@@ -745,8 +709,8 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
         .flatMap {
           case (input, bodyBytes) => {
             env.wasmIntegration.wasmVmFor(wasmConfig).flatMap {
-              case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => NgPluginHttpResponseHelper.fromResult(r))
-              case Some((vm, localConfig)) =>
+              case None => pluginNotFound(ctx.request, ctx.route, ctx.attrs).map(r => NgPluginHttpResponse.fromResult(r))
+              case Some((vm, _)) =>
                 vm.call(
                   WasmFunctionParameters.ExtismFuntionCall(
                     "cloud_apim_module_plugin_execute_on_error",
@@ -755,7 +719,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                       "env" -> pluginConfig.env,
                       "module" -> pluginConfig.modulePath,
                       "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
-                      "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(map => JsObject(map.mapValues(_.json))).getOrElse(JsNull).asValue,
+                      "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                       "cause_id" -> ctx.maybeCauseId.map(JsString.apply).getOrElse(JsNull).asValue,
                       "call_attempts" -> ctx.callAttempts,
                       "message" -> ctx.message,
@@ -780,7 +744,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                       body = body.map(_.chunks(16 * 1024)).getOrElse(bodyBytes.chunks(16 * 1024)),
                       cookies = WasmUtils.convertJsonCookies(response).getOrElse(ctx.otoroshiResponse.cookies),
                     )
-                  case Left(value) => NgPluginHttpResponseHelper.fromResult(Results.BadRequest(value))
+                  case Left(value) => NgPluginHttpResponse.fromResult(Results.BadRequest(value))
                 }.andThen {
                   case _ => vm.release()
                 }

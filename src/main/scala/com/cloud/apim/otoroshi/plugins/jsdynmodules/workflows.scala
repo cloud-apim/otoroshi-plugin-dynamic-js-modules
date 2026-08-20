@@ -2,11 +2,11 @@ package com.cloud.apim.otoroshi.plugins.jsdynmodules
 
 import io.otoroshi.wasm4s.scaladsl.{WasmFunctionParameters, WasmSource, WasmSourceKind}
 import otoroshi.env.Env
-import otoroshi.next.workflow._
-import otoroshi.utils.syntax.implicits._
+import otoroshi.next.workflow.*
+import otoroshi.utils.syntax.implicits.*
 import otoroshi.wasm.WasmConfig
 import otoroshi_plugins.com.cloud.apim.plugins.jsdynmodules.JsModulePlugin
-import play.api.libs.json._
+import play.api.libs.json.*
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -68,7 +68,7 @@ class RunFunctionFunction extends WorkflowFunction {
     )
   ))
 
-  override def callWithRun(args: JsObject)(implicit env: Env, ec: ExecutionContext, wfr: WorkflowRun): Future[Either[WorkflowError, JsValue]] = {
+  override def callWithRun(args: JsObject)(using env: Env, ec: ExecutionContext, wfr: WorkflowRun): Future[Either[WorkflowError, JsValue]] = {
     val code = args.select("code").asString
     val arguments = args.select("arguments").asOpt[JsObject].map(_.stringify)
       .orElse(args.select("arguments").asOpt[JsArray].map(_.stringify))
@@ -79,7 +79,7 @@ class RunFunctionFunction extends WorkflowFunction {
     val pluginConfig = WasmConfig(source = WasmSource(WasmSourceKind.Local, JsModulePlugin.wasmPluginId, Json.obj()))
     env.wasmIntegration.wasmVmFor(pluginConfig).flatMap {
       case None => WorkflowError("Unable to find js runtime").leftf
-      case Some((vm, localConfig)) =>
+      case Some((vm, _)) =>
         vm.call(
           WasmFunctionParameters.ExtismFuntionCall(
             "cloud_apim_module_plugin_execute_user_function",
