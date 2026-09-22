@@ -18,7 +18,7 @@ lazy val root = (project in file("."))
     ),
     libraryDependencies ++= Seq(
       // otoroshi brings wasm4s (bundle), scaffeine and pekko-connectors-s3 transitively
-      "fr.maif" %% "otoroshi" % "18.0.0-preview6" % "provided",
+      "fr.maif" %% "otoroshi" % "18.0.0-preview8" % "provided",
       munit % Test
     )
   )
