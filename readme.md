@@ -69,21 +69,31 @@ the context passed to the functions is structured like:
       "user-agent":"foo"
     }
   },
-  "raw_request": {  // only defined in the on_request phase
+  "raw_request": {  // only defined in the on_request phase, the request as received by otoroshi
+    "url": "https://api.oto.tools/foo?bar=baz",
     "method": "GET",
-    "path": "/foo",
     "headers": {
       "user-agent":"foo"
-    }
+    },
+    "query": {
+      "bar": ["baz"]
+    },
+    "cookies": [],
+    // also version, client_cert_chain and backend
   },
-  "otoroshi_request": { // only defined in the on_request phase
+  "otoroshi_request": { // only defined in the on_request phase, the request otoroshi will send to the backend
+    "url": "https://backend.oto.tools/foo?bar=baz",
     "method": "GET",
-    "path": "/foo",
     "headers": {
       "user-agent":"foo"
-    }
+    },
+    "query": {
+      "bar": ["baz"]
+    },
+    "cookies": [],
+    // also version, client_cert_chain and backend
   }, 
-  "body": [12, 23, 34], // request body as a byte array, not defined in the on_validate phase
+  "body": [12, 23, 34], // request body as a byte array, only defined in the on_request and on_backend_call phases
   "apikey": { // the request apikey if provided
     "clientId": "foo",
     "clientName": "foo",
@@ -97,19 +107,18 @@ the context passed to the functions is structured like:
     "metadata":[],
     "tags": [],
   }
-  "raw_response": { // only defined in the on_response and on_error phase
+  "raw_response": { // only defined in the on_response phase, without the body (it is in otoroshi_response)
     "status": 200,
     "headers": {
       "content-type": "text/html"
-    },
-    "body": [12, 23, 34]
+    }
   },
   "otoroshi_response": { // only defined in the on_response and on_error phase
     "status": 200,
     "headers": {
       "content-type": "text/html"
     },
-    "body": [12, 23, 34]
+    "body": [12, 23, 34] // response body as a byte array, null if empty
   },
   "cause_id": "xxx", // only defined in the on_error phase
   "call_attempts": 3, // only defined in the on_error phase
@@ -125,7 +134,7 @@ for the `on_validate` phase:
 return {
   result: true, // if result is false, then error is returned to client
   error: {
-    "status": 200,
+    "status": 403, // defaults to 403
     "headers": {
       "content-type": "application/json"
     },
@@ -136,19 +145,62 @@ return {
 }
 ```
 
-for the `on_request` phase:
+if `error` contains no body, `headers` are ignored and otoroshi returns its standard error response built from `error.status` and `error.message`:
+
+```js
+return {
+  result: false,
+  error: {
+    "status": 401,
+    "message": "you are not allowed to access this resource"
+  }
+}
+```
+
+if the function throws, the call is rejected with a `500` response whose body is `{ "error": "<exception message>" }`.
+
+for the `on_request` phase, to forward the request to the backend:
 
 ```js 
 return {
-  "error": false, // if error is true, then an error is returned to client with the response specified 
-  "status": 200,
+  "method": "POST",
+  "url": "https://backend.oto.tools/foo?bar=baz",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "cookies": [],
+  "body_json": { // can be also body_bytes, body_base64, body_str
+    "hello": "world"
+  }
+}
+```
+
+the forwarded request is built from these fields. Any field that is not returned keeps its original value, and the original body is kept when no `body_*` field is returned (`ctx.body` is a byte array and is not read back: use `body_bytes` to send bytes). So you can spread `ctx.otoroshi_request` and override what you need. The `query`, `version`, `client_cert_chain` and `backend` fields are ignored: change the query string through `url`.
+
+```js
+exports.on_request = function(ctx) {
+  return {
+    ...ctx.otoroshi_request,
+    headers: {
+      ...ctx.otoroshi_request.headers,
+      'x-hello': 'world',
+    }
+  };
+};
+```
+
+to reject the request and return a response to the client instead:
+
+```js 
+return {
+  "error": true,
+  "status": 403, // defaults to 500
   "headers": {
     "content-type": "application/json"
   },
   "body_json": { // can be also body_bytes, body_base64, body_str
     "error": "..."
-  },
-  "otoroshi_request": {...} // the otoroshi_request from the context with modifications if needed and error === false
+  }
 }
 ```
 
@@ -178,10 +230,11 @@ return {
   },
   "body_json": { // can be also body_bytes, body_base64, body_str
     "error": "..."
-  },
-  "otoroshi_response": {...} // the otoroshi_response from the context with modifications if needed and error === false
+  }
 }
 ```
+
+when `error` is false, the response sent to the client is built from `status`, `headers`, `cookies` and the body fields returned at the top level, so you can spread `ctx.otoroshi_response` and override what you need. Any field that is not returned keeps its original value, and the original body is kept when no `body_*` field is returned (`ctx.otoroshi_response.body` is a byte array and is not read back: use `body_bytes` to send bytes).
 
 for the `on_error` phase:
 

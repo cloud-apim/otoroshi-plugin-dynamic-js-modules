@@ -263,6 +263,20 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
     }
   }
 
+  // the response sent to the client when a module rejects a call, built from the `status`, `headers`,
+  // `cookies` and `body_*` fields it returned
+  private def errorResult(doc: JsValue, body: ByteString, defaultStatus: Int): Result = {
+    val status      = doc.select("status").asOpt[Int].getOrElse(defaultStatus)
+    val headers     = doc.select("headers").asOpt[Map[String, String]].getOrElse(Map.empty)
+    val cookies     = WasmUtils.convertJsonPlayCookies(doc).getOrElse(Seq.empty)
+    val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
+    Results
+      .Status(status)(body)
+      .withCookies(cookies*)
+      .withHeaders(headers.toSeq*)
+      .as(contentType)
+  }
+
   private def s3ClientSettingsAttrs(conf: S3Configuration): Attributes = {
     val awsCredentials = StaticCredentialsProvider.create(
       AwsBasicCredentials.create(conf.access, conf.secret)
@@ -475,18 +489,27 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   if (result) {
                     NgAccess.NgAllowed.vfuture
                   } else {
-                    val error = (response \ "error").asOpt[JsObject].getOrElse(Json.obj())
-                    Errors
-                      .craftResponseResult(
-                        (error \ "message").asOpt[String].getOrElse("An error occured 111"),
-                        Results.Status((error \ "status").asOpt[Int].getOrElse(403)),
-                        ctx.request,
-                        None,
-                        None,
-                        attrs = ctx.attrs,
-                        maybeRoute = ctx.route.some
-                      )
-                      .map(r => NgAccess.NgDenied(r))
+                    // when the module throws or returns nothing, the runtime answers with a flat
+                    // `{ error: true, status, headers, body_* }` document instead of an `error` object
+                    val error = (response \ "error")
+                      .asOpt[JsObject]
+                      .orElse(response.asOpt[JsObject].filter(_.select("error").asOpt[Boolean].contains(true)))
+                      .getOrElse(Json.obj())
+                    BodyHelper.extractBodyFromOpt(error) match {
+                      case Some(body) => NgAccess.NgDenied(errorResult(error, body, 403)).vfuture
+                      case None       =>
+                        Errors
+                          .craftResponseResult(
+                            (error \ "message").asOpt[String].getOrElse("An error occured"),
+                            Results.Status((error \ "status").asOpt[Int].getOrElse(403)),
+                            ctx.request,
+                            None,
+                            None,
+                            attrs = ctx.attrs,
+                            maybeRoute = ctx.route.some
+                          )
+                          .map(r => NgAccess.NgDenied(r))
+                    }
                   }
                 case Left(value) => NgAccess.NgDenied(Results.BadRequest(value)).vfuture
               }.andThen { case _ =>
@@ -596,16 +619,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   AttrsHelper.updateAttrs(ctx.attrs, response)
                   val body = BodyHelper.extractBodyFromOpt(response)
                   if (response.select("error").asOpt[Boolean].getOrElse(false)) {
-                    val status = response.select("status").asOpt[Int].getOrElse(500)
-                    val headers = (response \ "headers").asOpt[Map[String, String]].getOrElse(Map.empty)
-                    val cookies = WasmUtils.convertJsonPlayCookies(response).getOrElse(Seq.empty)
-                    val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
-                    Results
-                      .Status(status)(body.getOrElse(ByteString.empty))
-                      .withCookies(cookies*)
-                      .withHeaders(headers.toSeq*)
-                      .as(contentType)
-                      .left
+                    errorResult(response, body.getOrElse(ByteString.empty), 500).left
                   } else {
                     ctx.otoroshiRequest.copy(
                       // TODO: handle client cert chain and backend
@@ -652,10 +666,11 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     "externalApiUrl" -> pluginConfig.externalApiUrl.map(_.json).getOrElse(JsNull).asValue,
                     "externalApiHeaders" -> pluginConfig.externalApiHeaders.map(_.jsonObject).getOrElse(JsNull).asValue,
                     "raw_response" -> ctx.rawResponse.json,
-                    "otoroshi_response" -> ctx.otoroshiResponse.json,
+                    "otoroshi_response" -> (ctx.otoroshiResponse.json.asObject ++ Json.obj(
+                      "body" -> input.select("response_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue
+                    )),
                     "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
                     "snowflake" -> ctx.snowflake,
-                    "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
                     "apikey" -> ctx.apikey.map(_.lightJson).getOrElse(JsNull).asValue,
                     "user" -> ctx.user.map(_.lightJson).getOrElse(JsNull).asValue,
                   ).stringify
@@ -667,19 +682,10 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                   AttrsHelper.updateAttrs(ctx.attrs, response)
                   val body = BodyHelper.extractBodyFromOpt(response)
                   if (response.select("error").asOpt[Boolean].getOrElse(false)) {
-                    val status      = response.select("status").asOpt[Int].getOrElse(500)
-                    val headers     = (response \ "headers").asOpt[Map[String, String]].getOrElse(Map.empty)
-                    val cookies     = WasmUtils.convertJsonPlayCookies(response).getOrElse(Seq.empty)
-                    val contentType = headers.getIgnoreCase("Content-Type").getOrElse("application/octet-stream")
-                    Results
-                      .Status(status)(body.getOrElse(ByteString.empty))
-                      .withCookies(cookies*)
-                      .withHeaders(headers.toSeq*)
-                      .as(contentType)
-                      .left
+                    errorResult(response, body.getOrElse(ByteString.empty), 500).left
                   } else {
                     ctx.otoroshiResponse.copy(
-                      status = (response \ "status").asOpt[Int].getOrElse(200),
+                      status = (response \ "status").asOpt[Int].getOrElse(ctx.otoroshiResponse.status),
                       headers =
                         (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiResponse.headers),
                       body = body.map(_.chunks(16 * 1024)).getOrElse(bodyBytes.chunks(16 * 1024)),
@@ -723,10 +729,11 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                       "cause_id" -> ctx.maybeCauseId.map(JsString.apply).getOrElse(JsNull).asValue,
                       "call_attempts" -> ctx.callAttempts,
                       "message" -> ctx.message,
-                      "otoroshi_response" -> ctx.otoroshiResponse.json,
+                      "otoroshi_response" -> (ctx.otoroshiResponse.json.asObject ++ Json.obj(
+                        "body" -> input.select("response_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue
+                      )),
                       "request" -> input.select("request").asOpt[JsValue].getOrElse(JsNull).asValue,
                       "snowflake" -> ctx.snowflake,
-                      "body" -> input.select("request_body_bytes").asOpt[JsValue].getOrElse(JsNull).asValue,
                       "apikey" -> ctx.apikey.map(_.lightJson).getOrElse(JsNull).asValue,
                       "user" -> ctx.user.map(_.lightJson).getOrElse(JsNull).asValue,
                     ).stringify
@@ -738,7 +745,7 @@ class JsModulePlugin extends NgAccessValidator with NgRequestTransformer with Ng
                     AttrsHelper.updateAttrs(ctx.attrs, response)
                     val body = BodyHelper.extractBodyFromOpt(response)
                     ctx.otoroshiResponse.copy(
-                      status = (response \ "status").asOpt[Int].getOrElse(200),
+                      status = (response \ "status").asOpt[Int].getOrElse(ctx.otoroshiResponse.status),
                       headers =
                         (response \ "headers").asOpt[Map[String, String]].getOrElse(ctx.otoroshiResponse.headers),
                       body = body.map(_.chunks(16 * 1024)).getOrElse(bodyBytes.chunks(16 * 1024)),
